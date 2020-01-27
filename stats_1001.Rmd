@@ -1,0 +1,130 @@
+---
+title: "Goodreads 1001 books Stats"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(httr)
+library(XML)
+library(purrr)
+library(rvest)
+library(DT)
+library(highcharter)
+stats_books <- readRDS('stats_books.rds') %>% distinct(title,author,.keep_all=TRUE)
+ratings <- readRDS('all_ratings.rds')
+# remove term limits, not a list book
+ratings <-  ratings %>% filter(ref_book_id != '85392')
+stats_books <-  stats_books %>% filter(ref_book_id != '85392')
+
+stats_books$Link <- str_c("https://www.goodreads.com/book/show/",stats_books$ref_book_id)
+stats_books$html_link <- str_c('<a href=',stats_books$Link, ">",stats_books$ref_book_id,'</a>')
+stats_books$rating_mean <- round(stats_books$rating_mean,2)
+stats_books <- stats_books %>% mutate(prefered=if_else(rating_mean> rating,'1001 Books Group', 'Goodreads user'))
+
+stats_books <- stats_books %>% mutate(color=case_when(prefered=='1001 Books Group' & rating_count>=10 ~ '#35CD9E',
+                                                      prefered=='1001 Books Group'  ~ '#82FCD6',
+                                                      rating_count <  10 ~ '#FC82A0',
+                                                      TRUE ~ '#d22d56' ))
+
+
+books_by_member <- ratings %>% group_by(member_id) %>% summarise(count_books=n_distinct(ref_book_id))
+```
+
+
+Some analysis on the books read by people in this group, in particular in the 1001 books list of course, using the Goodreads API and some webscraping.
+
+I used the <a href=https://www.goodreads.com/list/show/952.1001_Books_You_Must_Read_Before_You_Die> listopia </a> to get the list of all books and their goodreads identifiers.
+Then I browse the members of this group, and in order to keep computations in a reasonable time, I only look at the books read by people who have left at least one comment in the group. This is 2049 members, but some of these members have a private profile, so I could not see what they read. In the end I have data for 1423 members.
+
+The data has been retrieved December 26th 2019.
+
+
+
+## Most popular books among group members
+
+
+```{r most_pop,echo=FALSE}
+top25read <- stats_books %>% ungroup() %>% top_n(25,count) %>% arrange(-count)
+
+highchart() %>%
+  hc_chart(type="bar") %>%
+  hc_xAxis(categories=str_c(top25read$title, " ", top25read$author)) %>%
+  hc_add_series(data=top25read$count,name='Number of members',color="#35CD9E")
+
+```
+
+## Least popular books among group members
+
+
+```{r least_pop,echo=FALSE}
+flop25read <- stats_books %>% ungroup() %>% top_n(20,-count) %>% arrange(count)
+
+highchart() %>%
+  hc_chart(type="bar") %>%
+  hc_xAxis(categories=str_c(flop25read$title, " ", flop25read$author)) %>%
+  hc_add_series(data=flop25read$count,name='Number of members',color="#d22d56")
+```
+
+
+
+## Difference between group members ratings and Goodreads average rating
+
+Group members seem to be hard to please, only `r nrow(stats_books %>% filter(prefered=='1001 Books Group'))` books have a better rating by the member of the group than in average on Goodreads
+
+In the plot below, each point represents a book.
+If the color is green, then the book has a better average rating among members of the group, the color is red otherwise.
+The lighter colors are for books which have 10 ratings or less by members of the group.
+
+```{r rating_compared,echo=FALSE,warning=FALSE}
+
+hchart(stats_books,'scatter',hcaes(x=rating,y=rating_mean,color=color),marker=list(radius=2),tooltip = list(pointFormat = "<b> {point.title}, {point.author} <br>
+                                                                                        Goodreads rating: {point.rating} by {point.nRaters} users  <br>
+                                                                                        Group members rating: {point.rating_mean} by {point.rating_count} users")) %>%
+      hc_xAxis(title=list(text='Goodreads average rating'),max=5) %>%
+      hc_yAxis(title=list(text='1001 Books Group members average rating'),min=1,max=5) %>%
+      hc_tooltip(headerFormat="")
+
+```
+
+
+## Complete list
+
+You will find here the statistics for each book in the list. You can filter books by using the rectangles below column names and use the arrows near column names to sort on that column.
+
+
+```{r completelist, echo=FALSE}
+
+
+datatable(stats_books %>% select(html_link,title,author,count,rating_count,rating_mean,nRaters,rating),rownames=FALSE,
+          colnames=c('Goodreads ID', 'Title', 'Author','# group members read', '# group members rated','Avg rating by group members',
+                     '# Goodreads members read', 'Avg rating on Goodreads'),
+          filter='top',escape=FALSE) %>%
+        formatRound(c('rating','rating_mean'),digits=2) %>%
+        formatRound('nRaters', digits=0, mark=",")
+```
+
+## Books read by member
+
+On average, every active member of the group has read `r round(mean(books_by_member$count_books))` books.
+
+The median is `r median(books_by_member$count_books)` books, which means that 50% of the members have read less than `r median(books_by_member$count_books)` books.
+
+The minimum is 1 book and the maximum `r max(books_by_member$count_books)` books.
+
+```{r books_by_member, echo=FALSE}
+
+
+h <- hist(books_by_member$count_books,plot=FALSE,breaks=100)
+hchart(h,showInLegend=FALSE) %>% 
+      hc_xAxis(title=list(text='Number of books read among the list'),
+               plotLines=list(list(value=median(books_by_member$count_books),color='#d22d56',width=2,zIndex=4,label=list(text='top 50%')),
+                              list(value=as.numeric(quantile(books_by_member$count_books,.25)),color='#d22d56',width=2,zIndex=4,label=list(text='top 75%')),
+                              list(value=as.numeric(quantile(books_by_member$count_books,.75)),color='#d22d56',width=2,zIndex=4,label=list(text='top 25%')),
+                              list(value=as.numeric(quantile(books_by_member$count_books,.9)),color='#d22d56',width=2,zIndex=4,label=list(text='top 10%')),
+                              list(value=as.numeric(quantile(books_by_member$count_books,.95)),color='#d22d56',width=2,zIndex=4,label=list(text='top 5%')),
+                              list(value=as.numeric(quantile(books_by_member$count_books,.99)),color='#d22d56',width=2,zIndex=4,label=list(text='top 1%'))
+                              )) %>%
+      hc_yAxis(title=list(text='Number of members'))
+```
